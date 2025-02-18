@@ -53,6 +53,7 @@ func pairwiseDistances(embeddings *Node, metric PairwiseDistanceMetric) *Node {
 	batchSize := embeddings.Shape().Dim(0)
 	dtype := embeddings.DType()
 	zero := ScalarZero(g, dtype)
+	one := ScalarOne(g, dtype)
 	eps := epsilonForDType(g, dtype)
 
 	// Get the dot product between all embeddings
@@ -88,6 +89,9 @@ func pairwiseDistances(embeddings *Node, metric PairwiseDistanceMetric) *Node {
 		distances = Where(mask, zero, distances)
 	case PairwiseDistanceMetricCosine:
 		// normalize input
+		// Denominator needs to replace fully zero slices (on the reduceAxes) by 1s, before the `Sqrt`,
+		// to avoid NaNs in the gradient.
+		squareL2Norm = Where(IsZero(squareL2Norm), one, squareL2Norm)
 		embeddings = Div(embeddings, InsertAxes(Sqrt(squareL2Norm), 1))
 		// create adjacent matrix of cosine similarity
 		distances = OneMinus(MatMul(embeddings, Transpose(embeddings, 0, 1)))
