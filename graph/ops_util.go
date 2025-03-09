@@ -898,7 +898,7 @@ func ConsecutiveDifference(x *Node, axis int, preserveShape bool) *Node {
 		kernel = Reshape(kernel, kernelDims...)
 
 		output := Convolve(expandedX, kernel).
-			NoPadding().             // Default padding.
+			NoPadding(). // Default padding.
 			PaddingPerDim(paddings). // Only has an effect if paddings != nil.
 			Strides(1).
 			Done()
@@ -952,4 +952,49 @@ func ReduceSkewness(x *Node, axes ...int) *Node {
 // If no axes is given, it assumes it should reduce all axes and returns a scalar.
 func Skewness(x *Node, axes ...int) *Node {
 	return ReduceSkewness(x, axes...)
+}
+
+// CosineSimilarity calculates the cosine similarity between the lhs and rhs nodes along the given axis.
+// A typical value for axis is -1, it calculates the cosine similarity for the last dimension.
+//
+// The output will have the same rank, but the axis is contracted to 1, and will hold the similarity.
+func CosineSimilarity(lhs *Node, rhs *Node, axis int) *Node {
+	g := lhs.Graph()
+	dtype := lhs.DType()
+
+	// Mask for rows that are fully zero, for which cosine similary is not normally defined.
+	lhsAxisZeroMask := ReduceAndKeep(IsZero(lhs), ReduceLogicalAnd, axis)
+	rhsAxisZeroMask := ReduceAndKeep(IsZero(rhs), ReduceLogicalAnd, axis)
+
+	// Recover original shape, by broadcasting the mask where we just reduced.
+	lhsMask := BroadcastToShape(ConvertDType(lhsAxisZeroMask, dtypes.Bool), lhs.Shape())
+	rhsMask := BroadcastToShape(ConvertDType(rhsAxisZeroMask, dtypes.Bool), rhs.Shape())
+
+	// Replace rows with all zeroes (lhsMask/rhsMask) with 1.
+	// Any positive numerical safe number would work, since the final computation for
+	// those rows won't be used, as long as they are not NaNs.
+	one := ScalarOne(g, dtype)
+	lhs = Where(lhsMask, one, lhs)
+	rhs = Where(rhsMask, one, rhs)
+
+	// Set up contracting axis and the remaining batch axes.
+	adjustedAxis := adjustAxisToRank(axis, lhs.Rank())
+	contractingAxes := [][2]int{{adjustedAxis, adjustedAxis}}
+	batchAxes := make([][2]int, 0, lhs.Rank()-1)
+	for batchAxis := range lhs.Rank() {
+		if batchAxis == adjustedAxis {
+			// This is the contracting axis.
+			continue
+		}
+		batchAxes = append(batchAxes, [2]int{batchAxis, batchAxis})
+	}
+	dotProduct := EinsumAxes(lhs, rhs, contractingAxes, batchAxes)
+	dotProduct = ExpandAxes(dotProduct, adjustedAxis) // Recover the contracted axis, with dimension 1.
+	normalisationDenominator := Mul(L2Norm(lhs, axis), L2Norm(rhs, axis))
+	similarity := Div(dotProduct, normalisationDenominator)
+
+	// Arbitrarily set the similarity of the zero-rows (lhsMask or rhsMask) to zero.
+	zero := ScalarZero(g, dtype)
+	similarity = Where(LogicalOr(lhsAxisZeroMask, rhsAxisZeroMask), zero, similarity)
+	return similarity
 }

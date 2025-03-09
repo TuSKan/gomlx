@@ -1,13 +1,14 @@
 package graph_test
 
 import (
+	"math"
+	"testing"
+
 	. "github.com/gomlx/gomlx/graph"
 	"github.com/gomlx/gomlx/graph/graphtest"
 	"github.com/gomlx/gomlx/types/shapes"
 	"github.com/gomlx/gomlx/types/xslices"
 	"github.com/gomlx/gopjrt/dtypes"
-	"math"
-	"testing"
 )
 
 func TestScalar(t *testing.T) {
@@ -605,4 +606,39 @@ func TestL2Normalize(t *testing.T) {
 			[][]float32{{0.6, 0.8}, {0, 0}},
 			[][]float32{{0.032, -0.024}, {1, 1}},
 		}, 1e-3)
+}
+
+func TestCosineSimilarity(t *testing.T) {
+	graphtest.RunTestGraphFn(t, t.Name(),
+		func(g *Graph) (inputs, outputs []*Node) {
+			x := Const(g, [][]float32{
+				{0, 0, 0},
+				{7, 0, 0},
+				{0, 0, 13},
+			})
+			y := Const(g, [][]float32{
+				{10, 20, 30},
+				{2, 0, 0},
+				{0, 0, -11},
+			})
+			inputs = []*Node{x, y}
+			outputs = []*Node{
+				CosineSimilarity(x, y, -1), // Rows: Axis -1
+				CosineSimilarity(x, y, 0),  // Columns: Axis 0
+			}
+			return
+		}, []any{
+			[][]float32{{0}, {1}, {-1}},
+			[][]float32{{0.19611612, 0, -0.34425467}},
+		}, 0.0001)
+
+	// Check the gradient of zero vectors won't yield NaNs.
+	testGradients(t, "CosineSimilarity Gradient", func(g *Graph) (output *Node, nodesForGrad []*Node) {
+		x := Const(g, [][]float32{{0, 0, 0}})
+		y := Const(g, [][]float32{{10, 20, 30}})
+		output = CosineSimilarity(x, y, -1)
+		return output, []*Node{x}
+	}, []any{
+		[][]float32{{0, 0, 0}},
+	})
 }

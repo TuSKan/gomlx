@@ -1,20 +1,36 @@
 # GoMLX changelog
 
-# Next:
+# v0.17.1: 2025/02/26 CosineSimilarity, Bitcast and many fixes and improvements.
 
 * Added MNIST example (thanks to @TuSKan).
 * `gomlx_checkpoints` now displays the value of scalar variables.
 * Package `checkpoints`:
   * Loading a checkpoint overwrites the values of variables already present in the context.
   * Fixes when saving, in particular if using `Immediate()` loading.
+* Package `tensors`:
+  * Allow shared tensors to be donated.
 * Package `graph`:
   * Fixed when using axes != -1 for `L1Norm`.
   * Added `IsZero` shortcut.
   * Fixed `L2Normalize` to handle 0s without NaN, both in the forward evaluation, and in the gradient.
   * Renamed indicator functions to `PositiveIndicator`, `NonNegativeIndicator`, `NegativeIndicator` and `NonPositiveIndicator`.
   * Added backprop for `ReduceMin` that was missing (thx @TuSKan)
-* Package `context`:
+  * Added `CosineSimilarity`, numerically safe for 0 vectors.
+  * Added `BitcastConvert`.
+* Package `ml/context`:
   * Added support for string derived types for `context.GetParamsOr[T]`.
+* Package `ml/train`:
+  * Created `ExecPerStepUpdateGraphFn` for those creating custom "TrainStep" functions.
+* Package `ml/train/losses`:
+  * Triplet losses now work with context.
+  * `CheckExtraLabelsForWeightsAndMask` now (1) accepts weights and mask in any order; (2) normalize weights such that the sum is (non-masked) bathSize, 
+    preserving the ratio. This way the mean will be 1.
+  * Losses with masks and weights fixed so weights/mask can be given in any order.
+    Also, now using MaskedReduceMean if there is a mask, and all losses return a scalar.
+* Package `xla`:
+  * Removed suppression of logging: new PJRTs are not outputting random debug messages anymore.
+* Updated dependency to `gopjrt` v0.6.2.
+* Replaced `stringer` by `enumer` everywhere.
 
 # v0.17.0: bitwise ops, triplet losses, new layers, fixes, and more.
 
