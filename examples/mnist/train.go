@@ -81,16 +81,14 @@ func CreateDefaultContext() *context.Context {
 		optimizers.ParamOptimizer:       "adamw",
 		optimizers.ParamLearningRate:    1e-4,
 		optimizers.ParamAdamEpsilon:     1e-7,
-		optimizers.ParamAdamDType:       "",
+		optimizers.ParamAdamDType:       "float32",
+		optimizers.ParamAdamWeightDecay: 1e-4,
 		cosineschedule.ParamPeriodSteps: 0,
 		activations.ParamActivation:     "relu",
 		layers.ParamDropoutRate:         0.5,
+		layers.ParamNormalization:       "layer", // "layer" or "batch"
 		regularizers.ParamL2:            0.0,
 		regularizers.ParamL1:            0.0,
-
-		// CNN
-		"cnn_dropout_rate":  0.5,
-		"cnn_normalization": "layer", // "layer" or "batch".
 
 		// Triplet
 		losses.ParamTripletLossPairwiseDistanceMetric: "L2",
