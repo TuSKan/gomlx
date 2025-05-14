@@ -1,5 +1,81 @@
 # GoMLX changelog
 
+# Next
+
+* Package `simplego`:
+  * Fixed `Gather` of scalar values.
+  * Fixed `Where` checking of shape.
+  * New ops: `Erf`, `ArgMinMax`.
+* Package `backends/default`:
+  * Only include XLA by default on linux/amd64 platforms.
+* Package `shapeinference`:
+  * Changed to return errors instead of exceptions.
+* Package `types/tensors`:
+  * Removed dependency to `gopjrt/pjrt` -- otherwise we'll always need to install the C/C++ library.
+* Package `backend`:
+  * `Backend` interface now returns errors instead of panicking.
+* Package `graph`:
+  * Added `NewExecOrError` and `Exec.CallOrError` as error-returning alternatives.
+* gofmt cleanups by @zjtv
+
+# v0.19.1: 2025/04/30 SimpleGo fixes and new ops; New XLA, requires Gopjrt v0.7.0 update.
+
+* `go mod tidy`
+* Package `simplego`:
+  * "not implemented" error now includes the name of the corresponding method that was not implemented.
+  * Several memory fixes.
+  * Added `Slice` and `RngBitsGenerator` ops.
+* Updated to Gopjrt v0.7.0, with more memory fixes. **Requires an update of the C++ libraries**.
+
+# v0.19.0: 2025/04/29 Added SimpleGo, a pure Go backend
+
+* Package `backends`:
+  * Added `simplego`, a portable, simple albeit slow backend.
+    * Implemented ~50 most common ops, see `backends/simplego/capabilities`, and most common numeric types (including BFloat16).
+  * Added sub-package `notimplemented`: helper to implement new backends.
+  * Added sub-package `shapeinference`: helper to implement new backends.
+  * Added sub-package `default` which includes the default packages.
+  * Added `List()` function that returns the currently registered (compiled-in) backends.
+* Package `checkpoints`
+  * Added `Config.FromEmbed` that allows loading a checkpoint from an embedded variable.
+* Package `graph`:
+  * `Gather` and `GatherSlices` now have and extra argument called `indicesAreSorted` that tells whether
+    the start indices are guaranteed to be sorted, which allows some optimizations in some platforms.
+  * Exposed `BackendGather`, `BackendScatterMax`, `BackendScatterMin` and `BackendScatterSum` for test and debugging
+    purposes.
+* Moved code generation tools from `cmd` to `internal/cmd` directory.
+
+# v0.18.1: 2025/04/13 Many fixes, XLA update, Tensor clone.
+
+* XLA Backend:
+  * Updated gopjrt dependency: fix to Scatter flags.
+* Package `graph`:
+  * Removed spurious logging.
+  * Added gradient for ScatterSum, ScatterMax, ScatterMin. Only for simple shapes for now.
+  * Fixed ExecOnceN to return many outputs.
+* Package `tensors`:
+  * Added `Tensor.Clone` and `Tensor.OnDeviceClone`.
+* Package `context`:
+  * Removed deprecated `NewContext` 
+  * Added `Variable.CloneToContext`
+  * Added `Context.Clone`
+  * Variable graphToNodeId is now a `xsync.SyncMap`, solving issues for concurrency of multiple graphs being
+    created/executed at the same time for the same Context.Exec object (with different shapes).
+  * Added `Variable.Finalize` and `Context.Finalize`.
+* Updated all dependencies and re-tested.
+
+# v0.18.0: Ragged2D; XLA update; Fixed Scatter functions; Fixed memory leaks.
+
+* XLA Backend: 
+  * Updated dependency to newest Gopjrt 0.6.3: small memory leak fixes
+  * Updated CPU PJRT and XlaBuilder
+  * Fixed Scatter* functions.
+* Package `graph`:
+  * Fixed `ScatterSum` (renamed from the now deprecated `ScatterAdd`), `ScatterMax` and `ScatterMin`. No gradients for `ScatterMax` and `ScatterMin` yet.
+  * Added `Ragged2D` with some utilities, in particular `Ragged2D.Softmax`.
+  * `DefaultNodeLogger` now accepts the `#full ` prefix that forces printing the full value of a tensor, 
+    in Go-code format.
+
 # v0.17.1: 2025/02/26 CosineSimilarity, Bitcast and many fixes and improvements.
 
 * Added MNIST example (thanks to @TuSKan).

@@ -24,6 +24,8 @@ package train
 
 import (
 	"fmt"
+	"io"
+
 	. "github.com/gomlx/exceptions"
 	"github.com/gomlx/gomlx/backends"
 	"github.com/gomlx/gomlx/graph"
@@ -33,7 +35,6 @@ import (
 	"github.com/gomlx/gomlx/ml/train/optimizers"
 	"github.com/gomlx/gomlx/types/tensors"
 	"github.com/pkg/errors"
-	"io"
 )
 
 const (
@@ -362,7 +363,7 @@ func (r *Trainer) callGraphFn(
 		inputsAndLabels = append(inputsAndLabels, t)
 	}
 
-	// Get executor.
+	// Get the executor for the graphType and input spec.
 	var execsMap map[any]*context.Exec
 	switch graphType {
 	case TrainType:
@@ -381,8 +382,9 @@ func (r *Trainer) callGraphFn(
 		}
 	}
 
-	// Run2 trainStepExecMap and check everything went fine.
+	// Exec.Call(), collect metrics:
 	err := TryCatch[error](func() { metrics = exec.Call(inputsAndLabels...) })
+
 	if err != nil {
 		panic(errors.WithMessage(err, "failed to execute train/eval step"))
 	}
@@ -424,11 +426,11 @@ func (r *Trainer) metricsUpdatesGraph(ctx *context.Context, labels, predictions 
 //
 // All arguments usually come from `Dataset.Yield`, see a more detailed description there. In short:
 //
-//   - info: provided by the dataset. Often just nil. Each value will trigger the creation
+//   - spec: provided by the dataset. Often just nil. Each value will trigger the creation
 //     of different computation graphs. Normally static values (for the dataset) used to describe
 //     the inputs. See longer discussion in `train.Dataset`.
 //   - inputs: always a slice, even though it's common to have only one input tensor in the slice.
-//     There must be always at least one input. For each `info` value, the number of inputs and labels
+//     There must be always at least one input. For each `spec` value, the number of inputs and labels
 //     must remain constant. It will return an error otherwise.
 //   - labels: also always a slice, even if commonly with only one tensor.
 //

@@ -25,6 +25,7 @@ import (
 	"github.com/gomlx/gopjrt/dtypes"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
+	"math"
 	"slices"
 	"testing"
 )
@@ -49,7 +50,7 @@ func TestGather(t *testing.T) {
 		// numbers=(Float64)[5 3]: [[0 1 2] [3 4 5] [6 7 8] [9 10 11] [12 13 14]]
 		numbers := IotaFull(g, MakeShape(F64, 5, 3))
 		indices := Const(g, 1)
-		gather := Gather(numbers, indices)
+		gather := Gather(numbers, indices, true)
 		g.Compile(gather)
 		got := g.Run()[0]
 		fmt.Printf("\t\tGather=%v\n", got)
@@ -77,7 +78,7 @@ func TestGather(t *testing.T) {
 		// numbers=(Float64)[5 3]: [[0 1 2] [3 4 5] [6 7 8] [9 10 11] [12 13 14]]
 		numbers := IotaFull(g, MakeShape(F64, 5, 3))
 		indices := Const(g, [][][]int{{{2}, {0}}, {{2}, {1}}})
-		gather := Gather(numbers, indices)
+		gather := Gather(numbers, indices, false)
 		g.Compile(gather)
 		got := g.Run()[0]
 		fmt.Printf("\t\tGather=%v\n", got)
@@ -98,7 +99,6 @@ func TestGather(t *testing.T) {
 		want := [][][]float64{{{8, 9}, {10, 11}}, {{0, 1}, {2, 3}}, {{4, 5}, {6, 7}}, {{12, 13}, {14, 15}}}
 		require.Equalf(t, want, got.Value(), "Gather: want %v, got %v", want, got)
 	}
-
 }
 
 func TestGatherSlices(t *testing.T) {
@@ -107,7 +107,7 @@ func TestGatherSlices(t *testing.T) {
 			input = IotaFull(g, shapes.Make(dtypes.Float32, 4, 5))
 			start := Const(g, [][]int32{{0}, {1}, {0}}) // Slice from rows 0, 2 and 0 of each example in the batch.
 			sizes := []int{1}                           // Take only one row per start.
-			output = GatherSlices(input, []int{0}, start, sizes)
+			output = GatherSlices(input, []int{0}, start, sizes, true)
 			return
 		}, [][][]float32{{{0, 1, 2, 3, 4}}, {{5, 6, 7, 8, 9}}, {{0, 1, 2, 3, 4}}})
 
@@ -116,7 +116,8 @@ func TestGatherSlices(t *testing.T) {
 			input = IotaFull(g, shapes.Make(dtypes.Float32, 4, 3))
 			start := Const(g, [][]int32{{0}, {1}}) // Slice from rows 0 and 1.
 			sizes := []int{2}                      // Take two rows per start.
-			output = GatherSlices(input, []int{0}, start, sizes)
+			output = GatherSlices(input, []int{0}, start, sizes, true)
+			return
 			return
 		}, [][][]float32{{{0, 1, 2}, {3, 4, 5}}, {{3, 4, 5}, {6, 7, 8}}})
 
@@ -125,7 +126,7 @@ func TestGatherSlices(t *testing.T) {
 			input = IotaFull(g, shapes.Make(dtypes.Float32, 4, 10))
 			start := Const(g, []int32{1, 1}) // Slice in middle of matrix.
 			sizes := []int{2, 3}             // Take a sub-matrix
-			output = GatherSlices(input, []int{0, 1}, start, sizes)
+			output = GatherSlices(input, []int{0, 1}, start, sizes, true)
 			return
 		}, [][]float32{{11, 12, 13}, {21, 22, 23}})
 }
@@ -147,13 +148,13 @@ func TestScatter(t *testing.T) {
 	}
 
 	{ // Simple leading indices dimension.
-		fmt.Println("\tScatterAdd(): leading indices dimension, and deeper slice dimension.")
-		g := NewGraph(backend, "ScatterAdd(): leading indices dimension, and deeper slice dimension.")
+		fmt.Println("\tScatterSum(): leading indices dimension, and deeper slice dimension.")
+		g := NewGraph(backend, "ScatterSum(): leading indices dimension, and deeper slice dimension.")
 		// numbers=(Float64)[5 3, 1]: [[[0] [1] [2]] [[3] [4] [5]]]
 		numbers := IotaFull(g, MakeShape(F64, 2, 3, 1))
 		indices := Const(g, [][]int{{2}, {0}})
 		operand := Ones(g, MakeShape(F64, 3, 3, 1))
-		scatter := ScatterAdd(operand, indices, numbers, false, true)
+		scatter := ScatterSum(operand, indices, numbers, false, true)
 		g.Compile(scatter)
 		got := g.Run()[0]
 		fmt.Printf("\t\tscatter=%v\n", got)
@@ -189,7 +190,7 @@ func BenchmarkScatter(b *testing.B) {
 				indices = ExpandAxes(indices, -1)
 				parts := make([]*Node, ConsecutiveScatters)
 				for ii := range parts {
-					parts[ii] = ExpandAxes(ScatterAdd(zeros, AddScalar(indices, float64(ii)), values, sorted, unique), -1)
+					parts[ii] = ExpandAxes(ScatterSum(zeros, AddScalar(indices, float64(ii)), values, sorted, unique), -1)
 				}
 				x := ReduceSum(Concatenate(parts, -1), -1)
 				return Add(state, x)
@@ -206,7 +207,7 @@ func BenchmarkScatter(b *testing.B) {
 				// Precompile graph for given inputNodes. It also makes sure the inputNodes are transferred to the accelerator.
 				scatterExec.Call(stateT, indicesT, valuesT)[0].FinalizeAll()
 				b.Run(fmt.Sprintf("sorted-%v_unique-%v_dtype-%s", sorted, unique, dtype), func(b *testing.B) {
-					for _ = range b.N {
+					for range b.N {
 						results := scatterExec.Call(stateT, indicesT, valuesT)
 						stateT.FinalizeAll()
 						stateT = results[0]
@@ -215,4 +216,149 @@ func BenchmarkScatter(b *testing.B) {
 			}
 		}
 	}
+}
+
+func TestScatterSum(t *testing.T) {
+	graphtest.RunTestGraphFn(t, "ScatterSum",
+		func(g *Graph) (inputs, outputs []*Node) {
+			initialValues := Zeros(g, shapes.Make(F32, 5))
+			flat := Const(g, []float32{1, 3, 5, 7, 11, 13})
+			indices := ExpandAxes(Const(g, []int32{0, 0, 0, 1, 1, 3}), -1)
+			inputs = []*Node{flat, indices}
+			outputs = []*Node{ScatterSum(initialValues, indices, flat, true, false)}
+			return
+		},
+		[]any{
+			[]float32{1 + 3 + 5, 7 + 11, 0, 13, 0},
+		},
+		0)
+}
+
+func TestScatterSumGradient(t *testing.T) {
+	backend := graphtest.BuildTestBackend()
+	operand := []float32{0, 0, 0, 0, -1}
+	updates := []float32{1, 3, 5, 7, 11, 13}
+	indices := []int32{0, 0, 0, 1, 1, 3}
+	outputs := ExecOnceN(backend, func(inputs []*Node) []*Node {
+		operand, indices, updates := inputs[0], inputs[1], inputs[2]
+		indices = ExpandAxes(indices, -1)
+		g := operand.Graph()
+		scattered := ScatterSum(operand, indices, updates, true, false)
+		mask := Const(g, []bool{true, false, false, true, true})
+		loss := MaskedReduceSum(scattered, mask)
+		//return []*Node{scattered, loss}
+		return append(Gradient(loss, operand, updates), scattered, loss)
+	}, operand, indices, updates)
+
+	fmt.Printf("gradOperand=%s\n", outputs[0].GoStr())
+	gradOperand := outputs[0].Value().([]float32)
+	fmt.Printf("gradFlat=%v\n", outputs[1].GoStr())
+	gradFlat := outputs[1].Value().([]float32)
+	fmt.Printf("scattered=%s\n", outputs[2].GoStr())
+	scattered := outputs[2].Value().([]float32)
+	fmt.Printf("loss=%s\n", outputs[3].GoStr())
+	loss := outputs[3].Value().(float32)
+
+	require.Equal(t, []float32{1 + 3 + 5, 7 + 11, 0, 13, -1}, scattered)
+	require.Equal(t, float32(9+13-1), loss)
+	require.Equal(t, []float32{1, 1, 1, 0, 0, 1}, gradFlat)
+	require.Equal(t, []float32{1, 0, 0, 1, 1}, gradOperand)
+}
+
+func TestScatterMax(t *testing.T) {
+	negInf := float32(math.Inf(-1))
+	graphtest.RunTestGraphFn(t, "ScatterMax",
+		func(g *Graph) (inputs, outputs []*Node) {
+			initialValues := BroadcastToDims(Infinity(g, dtypes.F32, -1), 5)
+			flat := Const(g, []float32{1, 3, 5, 7, 11, 13})
+			indices := ExpandAxes(Const(g, []int32{0, 0, 0, 1, 1, 3}), -1)
+			inputs = []*Node{flat, indices}
+			outputs = []*Node{ScatterMax(initialValues, indices, flat, true, false)}
+			return
+		},
+		[]any{
+			[]float32{5, 11, negInf, 13, negInf},
+		},
+		0)
+}
+
+func TestScatterMaxGradient(t *testing.T) {
+	backend := graphtest.BuildTestBackend()
+	negInf := float32(math.Inf(-1))
+	operand := []float32{negInf, negInf, negInf, negInf, -1}
+	updates := []float32{1, 3, 5, 7, 11, 13}
+	indices := []int32{0, 0, 0, 1, 1, 3}
+	outputs := ExecOnceN(backend, func(inputs []*Node) []*Node {
+		operand, indices, updates := inputs[0], inputs[1], inputs[2]
+		indices = ExpandAxes(indices, -1)
+		g := operand.Graph()
+		scattered := ScatterMax(operand, indices, updates, true, false)
+		mask := Const(g, []bool{true, false, false, true, true})
+		loss := MaskedReduceSum(scattered, mask)
+		//return []*Node{scattered, loss}
+		return append(Gradient(loss, operand, updates), scattered, loss)
+	}, operand, indices, updates)
+
+	fmt.Printf("gradOperand=%s\n", outputs[0].GoStr())
+	gradOperand := outputs[0].Value().([]float32)
+	fmt.Printf("gradFlat=%v\n", outputs[1].GoStr())
+	gradFlat := outputs[1].Value().([]float32)
+	fmt.Printf("scattered=%s\n", outputs[2].GoStr())
+	scattered := outputs[2].Value().([]float32)
+	fmt.Printf("loss=%s\n", outputs[3].GoStr())
+	loss := outputs[3].Value().(float32)
+
+	require.Equal(t, []float32{5, 11, negInf, 13, -1}, scattered)
+	require.Equal(t, float32(5+13-1), loss)
+	require.Equal(t, []float32{0, 0, 1, 0, 0, 1}, gradFlat)
+	require.Equal(t, []float32{0, 0, 0, 0, 1}, gradOperand)
+}
+
+func TestScatterMin(t *testing.T) {
+	posInf := float32(math.Inf(1))
+	graphtest.RunTestGraphFn(t, "ScatterMin",
+		func(g *Graph) (inputs, outputs []*Node) {
+			initialValues := BroadcastToDims(Infinity(g, dtypes.F32, 1), 5)
+			flat := Const(g, []float32{1, 3, 5, 7, 11, 13})
+			indices := ExpandAxes(Const(g, []int32{0, 0, 0, 1, 1, 3}), -1)
+			inputs = []*Node{flat, indices}
+			outputs = []*Node{ScatterMin(initialValues, indices, flat, true, false)}
+			return
+		},
+		[]any{
+			[]float32{1, 7, posInf, 13, posInf},
+		},
+		0)
+}
+
+func TestScatterMinGradient(t *testing.T) {
+	backend := graphtest.BuildTestBackend()
+	posInf := float32(math.Inf(1))
+	operand := []float32{posInf, posInf, posInf, posInf, 100}
+	updates := []float32{1, 3, 5, 7, 11, 13}
+	indices := []int32{0, 0, 0, 1, 1, 3}
+	outputs := ExecOnceN(backend, func(inputs []*Node) []*Node {
+		operand, indices, updates := inputs[0], inputs[1], inputs[2]
+		indices = ExpandAxes(indices, -1)
+		g := operand.Graph()
+		scattered := ScatterMin(operand, indices, updates, true, false)
+		mask := Const(g, []bool{true, false, false, true, true})
+		loss := MaskedReduceSum(scattered, mask)
+		//return []*Node{scattered, loss}
+		return append(Gradient(loss, operand, updates), scattered, loss)
+	}, operand, indices, updates)
+
+	fmt.Printf("gradOperand=%s\n", outputs[0].GoStr())
+	gradOperand := outputs[0].Value().([]float32)
+	fmt.Printf("gradFlat=%v\n", outputs[1].GoStr())
+	gradFlat := outputs[1].Value().([]float32)
+	fmt.Printf("scattered=%s\n", outputs[2].GoStr())
+	scattered := outputs[2].Value().([]float32)
+	fmt.Printf("loss=%s\n", outputs[3].GoStr())
+	loss := outputs[3].Value().(float32)
+
+	require.Equal(t, []float32{1, 7, posInf, 13, 100}, scattered)
+	require.Equal(t, float32(1+13+100), loss)
+	require.Equal(t, []float32{1, 0, 0, 0, 0, 1}, gradFlat)
+	require.Equal(t, []float32{0, 0, 0, 0, 1}, gradOperand)
 }

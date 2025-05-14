@@ -404,6 +404,9 @@ var VJPRegistration = map[NodeType]VJP{
 	NodeTypeDotGeneral:         vjpForSingleOutput(dotGeneralVJP),
 	NodeTypeSlice:              vjpForSingleOutput(sliceVJP),
 	NodeTypeGather:             vjpForSingleOutput(gatherVJP),
+	NodeTypeScatterSum:         vjpForSingleOutput(scatterSumVJP),
+	NodeTypeScatterMax:         vjpForSingleOutput(scatterMaxOrMinVJP),
+	NodeTypeScatterMin:         vjpForSingleOutput(scatterMaxOrMinVJP),
 	NodeTypeConcatenate:        vjpForSingleOutput(concatenateVJP),
 	NodeTypeConvGeneralDilated: vjpForSingleOutput(convGeneralDilatedVJP),
 	NodeTypeReduceWindow:       vjpForSingleOutput(reduceWindowVJP),
@@ -867,7 +870,7 @@ func gatherVJP(node, v *Node, _ shapes.Shape) []*Node {
 	}
 	if isSimpleGather {
 		return []*Node{
-			ScatterAdd(Zeros(node.graph, inputShape), indices, v, params.indicesAreSorted, false),
+			ScatterSum(Zeros(node.graph, inputShape), indices, v, params.indicesAreSorted, false),
 			nil, // No gradients for indices.
 		}
 	}
@@ -896,7 +899,7 @@ func gatherVJP(node, v *Node, _ shapes.Shape) []*Node {
 	scatterDimsToOperandDims := params.startIndexMap // Same map used in GatherSlice.
 	// We don't make any assumptions on uniqueness or sortedness of the indices. Likely the slices will overlap.
 	return []*Node{
-		backendScatterAdd(operand, startIndices, updates, params.indexVectorAxis, updateWindowsDims, insertedWindowDims, scatterDimsToOperandDims,
+		backendScatterSum(operand, startIndices, updates, params.indexVectorAxis, updateWindowsDims, insertedWindowDims, scatterDimsToOperandDims,
 			params.indicesAreSorted, false),
 		nil, // No gradients for indices.
 	}

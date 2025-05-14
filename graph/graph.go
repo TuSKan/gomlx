@@ -87,12 +87,13 @@
 //     in the middle of computation — handy to debug the math.
 package graph
 
-//go:generate go run ../cmd/graph_generator
+//go:generate go run ../internal/cmd/graph_generator
 
 import (
 	"fmt"
 	"github.com/gomlx/exceptions"
 	"github.com/gomlx/gomlx/backends"
+	"github.com/gomlx/gomlx/types"
 	"github.com/gomlx/gomlx/types/shapes"
 	"github.com/gomlx/gomlx/types/tensors"
 	"github.com/gomlx/gomlx/types/xslices"
@@ -106,9 +107,8 @@ import (
 
 // Graph with the operations and dependencies needed to run a computation.
 type Graph struct {
-	backend    backends.Backend
-	builder    backends.Builder
-	executable backends.Executable
+	backend backends.Backend
+	builder backends.Builder
 
 	id   GraphId
 	name string
@@ -135,6 +135,9 @@ type Graph struct {
 
 	// aliasScope is the current scope for aliases
 	aliasScope []string
+
+	// Compiled Graph
+	executable backends.Executable
 }
 
 // GraphId is globally unique.
@@ -365,13 +368,12 @@ func (g *Graph) Compile(outputs ...*Node) {
 	if len(outputs) == 0 {
 		exceptions.Panicf("no outputs selected when Graph.Compile graph %q", g.name)
 	}
-	for ii, output := range outputs {
-		if output.NumOutputs() != 1 {
-			exceptions.Panicf("Graph(%q).Compile cannot take multi-output nodes (output #%d: %s), this type of Node is internal only", g.name, ii, output)
-		}
-	}
-	// Check all nodes are from this graph.
+
+	// Sanity check on the output nodes.
 	for ii, node := range outputs {
+		if node.NumOutputs() != 1 {
+			exceptions.Panicf("Graph(%q).Compile cannot take multi-output nodes (output #%d: %s), this type of Node is internal only", g.name, ii, node)
+		}
 		if node == nil {
 			exceptions.Panicf("output node %d is nil when compiling graph %q", ii, g.name)
 			panic(nil) // Never executed, just to quiet warning below.
@@ -379,6 +381,16 @@ func (g *Graph) Compile(outputs ...*Node) {
 		if node.Graph() != g {
 			exceptions.Panicf("output node %d is part of a different graph (name=%q) than the one being compiled (name=%q)",
 				ii, node.graph.name, g.name)
+		}
+	}
+
+	// Create "identities" for duplicate outputs, and create a mapping if there are any:
+	outputsSet := types.MakeSet[*Node]()
+	for ii, node := range outputs {
+		if outputsSet.Has(node) {
+			outputs[ii] = Identity(node)
+		} else {
+			outputsSet.Insert(node)
 		}
 	}
 
@@ -391,7 +403,11 @@ func (g *Graph) Compile(outputs ...*Node) {
 	}
 
 	outputsOps := xslices.Map(outputs, func(node *Node) backends.Op { return node.outputOps[0] })
-	g.executable = g.builder.Compile(outputsOps...)
+	var err error
+	g.executable, err = g.builder.Compile(outputsOps...)
+	if err != nil {
+		panic(errors.WithMessagef(err, "Graph failed to compile for the backend"))
+	}
 	return
 }
 
@@ -496,6 +512,9 @@ func (g *Graph) RunWithMap(inputs ParamsMap) (outputs []*tensors.Tensor) {
 //
 // The donate slice indicates which buffers can be donated to the execution -- they are immediately finalized after
 // the execution is finished.
+//
+// Notice that for repeated output nodes in the graph (the same output node returned in more than one position), the
+// returned tensors are shared.
 func (g *Graph) RunWithBuffers(inputs []backends.Buffer, donate []bool) (outputs []*tensors.Tensor) {
 	g.AssertCompiled()
 	numParams := g.NumParameters()
@@ -507,18 +526,17 @@ func (g *Graph) RunWithBuffers(inputs []backends.Buffer, donate []bool) (outputs
 	}
 	var start time.Time
 	var results []backends.Buffer
+	var err error
 	if klog.V(1).Enabled() {
 		start = time.Now()
-		results = g.executable.Execute(inputs, donate)
+		results, err = g.executable.Execute(inputs, donate)
 		elapsed := time.Since(start)
 		klog.V(1).Infof("Graph.RunWithBuffers: %s elapsed", elapsed)
 	} else {
-		results = g.executable.Execute(inputs, donate)
+		results, err = g.executable.Execute(inputs, donate)
 	}
-	for ii, wasDonated := range donate {
-		if wasDonated {
-			g.backend.BufferFinalize(inputs[ii])
-		}
+	if err != nil {
+		panic(errors.WithMessagef(err, "Graph failed to execute"))
 	}
 	outputs = xslices.Map(results, func(buf backends.Buffer) *tensors.Tensor { return tensors.FromBuffer(g.backend, buf) })
 	return

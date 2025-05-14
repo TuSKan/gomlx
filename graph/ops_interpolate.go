@@ -1,15 +1,16 @@
 package graph
 
 import (
+	"cmp"
+
 	. "github.com/gomlx/exceptions"
 	"github.com/gomlx/gomlx/types/shapes"
 	"github.com/gomlx/gopjrt/dtypes"
-	"golang.org/x/exp/constraints"
 )
 
 // File with image manipulation tools
 
-func scalarMin[T constraints.Ordered](a, b T) T {
+func scalarMin[T cmp.Ordered](a, b T) T {
 	if b > a {
 		return a
 	}
@@ -242,7 +243,7 @@ func (c *InterpolationConfig) Done() (output *Node) {
 
 	// gatheredElements will be shaped [interpolationDims..., spanSizes...]
 	spanStart := Concatenate(spanStarts, -1)
-	gatheredElements := GatherSlices(input, axisToInterpolateList, spanStart, spanSizes)
+	gatheredElements := GatherSlices(input, axisToInterpolateList, spanStart, spanSizes, true)
 
 	// weightsCrosses of all the weights
 	var weightsCrosses *Node

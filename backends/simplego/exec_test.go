@@ -1,0 +1,106 @@
+package simplego
+
+import (
+	"fmt"
+	"github.com/gomlx/gomlx/backends"
+	"github.com/gomlx/gomlx/graph"
+	"github.com/gomlx/gomlx/ml/context"
+	"github.com/gomlx/gomlx/ml/context/initializers"
+	"github.com/gomlx/gomlx/types/shapes"
+	"github.com/gomlx/gopjrt/dtypes"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+func TestBuilder_Compile(t *testing.T) {
+	// backend must be exclusive (not shared across tests) for this test to work.
+	backend := New("")
+	builder := backend.Builder("test")
+	x, err := builder.Parameter("x", shapes.Make(dtypes.Float32, 3))
+	require.NoError(t, err)
+	require.NotNil(t, x)
+	x, err = builder.Neg(x)
+	require.NoError(t, err)
+	require.NotNil(t, x)
+	c, err := builder.Constant([]int64{1, 2, 3}, 3)
+	require.NoError(t, err)
+	require.NotNil(t, c)
+
+	exec, err := builder.Compile(x, c)
+	require.NoError(t, err)
+	require.NotNil(t, exec)
+
+	// Check that it fails if fed the wrong number of parameters.
+	i0, err := backend.BufferFromFlatData(0, []float32{1, 2, 3}, shapes.Make(dtypes.Float32, 3))
+	require.NoError(t, err)
+	i1, err := backend.BufferFromFlatData(0, []float32{1, 2, 3}, shapes.Make(dtypes.Float32, 3))
+	require.NoError(t, err)
+	_, err = exec.Execute([]backends.Buffer{i0, i1}, []bool{true, true})
+	require.Error(t, err)
+
+	// Check that it fails if fed incompatible parameters.
+	i0, err = backend.BufferFromFlatData(0, []float32{1, 2, 3, 4}, shapes.Make(dtypes.Float32, 4))
+	_, err = exec.Execute([]backends.Buffer{i0}, []bool{true})
+	require.Error(t, err)
+
+	i0, err = backend.BufferFromFlatData(0, []uint32{1, 2, 3}, shapes.Make(dtypes.Uint32, 3))
+	require.NoError(t, err)
+	_, err = exec.Execute([]backends.Buffer{i0}, []bool{true})
+	require.Error(t, err)
+
+	// Checks correct execution with donated inputs.
+	i0, err = backend.BufferFromFlatData(0, []float32{3, 5, 7}, shapes.Make(dtypes.Float32, 3))
+	require.NoError(t, err)
+	i0Data := i0.(*Buffer).flat.([]float32)
+	outputs, err := exec.Execute([]backends.Buffer{i0}, []bool{true})
+	require.NoError(t, err)
+	require.Len(t, outputs, 2)
+	require.True(t, &i0Data[0] == &(outputs[0].(*Buffer).flat.([]float32))[0])
+	outputShape, err := backend.BufferShape(outputs[1])
+	require.NoError(t, err)
+	require.True(t, outputShape.Equal(shapes.Make(dtypes.Int64, 3)))
+
+	// Save reference to buffer before finalizing it: it should be re-used on the next call.
+	oldOutput1 := outputs[1].(*Buffer)
+	err = backend.BufferFinalize(outputs[1]) // Return buffer: we want it re-used at the next call.
+	require.NoError(t, err)
+
+	// Checks correct execution without donated inputs.
+	// Notice the inputs were donated in the last interation, so we have to set them again.
+	i0, err = backend.BufferFromFlatData(0, []float32{3, 5, 7}, shapes.Make(dtypes.Float32, 3))
+	require.NoError(t, err)
+	outputs, err = exec.Execute([]backends.Buffer{i0}, []bool{false})
+	require.NoError(t, err)
+	require.Len(t, outputs, 2)
+	require.True(t, i0.(*Buffer) != outputs[0].(*Buffer))
+	outputShape, err = backend.BufferShape(outputs[1])
+	require.NoError(t, err)
+	require.True(t, outputShape.Equal(shapes.Make(dtypes.Int64, 3)))
+
+	// Checks that the output buffer for output1 was reused from the pool.
+	newOutput1 := outputs[1].(*Buffer)
+	require.True(t, oldOutput1 == newOutput1)
+}
+
+func TestGomlxIntegration(t *testing.T) {
+	// Makes sure we get a SimpleGo backend.
+	backend := backends.NewWithConfig(BackendName)
+	require.NotPanics(t, func() { _ = backend.(*Backend) })
+
+	// Checks that basic graph building and execution works.
+	y := graph.ExecOnce(backend, func(x *graph.Node) *graph.Node { return graph.Neg(x) }, float32(7))
+	fmt.Printf("\ty=-x: x=7, y=%s\n", y.GoStr())
+	require.Equal(t, float32(-7), y.Value())
+
+	ctx := context.New()
+	exec := context.NewExec(backend, ctx, func(ctx *context.Context, g *graph.Graph) *graph.Node {
+		counterVar := ctx.WithInitializer(initializers.Zero).VariableWithShape("counter", shapes.Make(dtypes.Int64))
+		counter := counterVar.ValueGraph(g)
+		counterVar.SetValueGraph(graph.OnePlus(counter))
+		return counter
+	})
+	for ii := range 10 {
+		got := exec.Call()[0]
+		require.Equal(t, int64(ii), got.Value())
+	}
+}

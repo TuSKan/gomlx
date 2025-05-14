@@ -49,7 +49,8 @@
 //
 //   - `local`: a copy of the values stored in CPU, as a Go flat array of the underlying dtype.
 //   - `onDevices`: a copy of the values stored in the accelerator device(s) (CPU, GPU, TPU, etc.),
-//     a wrapper for a "XLA's PJRT buffer" managed by the lower levels (see github.com/gomlx/gopjrt).
+//     a wrapper for whatever the backend uses as buffer managed by the lower levels (see github.com/gomlx/gopjrt
+//     for the XLA backend).
 //     There can be multiple `Device` backing of a tensor, if there are multiple devices (like a multi-GPU set up).
 //   - And "on-device" Tensor can also be "shared", if the backend allows it, in which case the local
 //     and "on-device" share the same memory allocation.
@@ -65,12 +66,12 @@
 package tensors
 
 import (
+	"sync"
+
 	"github.com/gomlx/gomlx/backends"
 	"github.com/gomlx/gomlx/types/shapes"
 	"github.com/gomlx/gopjrt/dtypes"
-	"github.com/gomlx/gopjrt/pjrt"
 	"github.com/pkg/errors"
-	"sync"
 )
 
 // Tensor represents a multidimensional arrays (from scalar with 0 dimensions, to arbitrarily large dimensions), defined
@@ -177,12 +178,6 @@ func (t *Tensor) AssertValid() {
 	}
 }
 
-// HasClient accepts anything that can return a xla.Client. That includes xla.Client itself and
-// graph.Backend.
-type HasClient interface {
-	Client() *pjrt.Client
-}
-
 // FinalizeAll immediately frees all associated data and leave Tensor in an invalid state. Shape is cleared also.
 //
 // It's the caller responsibility to ensure the tensor buffers are not being used elsewhere (like in the middle of an execution).
@@ -196,7 +191,6 @@ func (t *Tensor) FinalizeAll() {
 // lockedFinalizeAll is FinalizeAll but must be called with the tensor already locked.
 func (t *Tensor) lockedFinalizeAll() {
 	if t == nil {
-		t.mu.Unlock()
 		return
 	}
 	if t.local != nil {

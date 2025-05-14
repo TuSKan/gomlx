@@ -28,6 +28,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -265,6 +266,20 @@ func NewExec[F ExecGraphFn](backend backends.Backend, graphFn F) *Exec {
 	return NewExecAny(backend, graphFn)
 }
 
+// NewExecOrError creates an Exec object or returns an error if it fails.
+//
+// It is like NewExec, but it doesn't panic.
+func NewExecOrError[F ExecGraphFn](backend backends.Backend, graphFn F) (*Exec, error) {
+	var e *Exec
+	err := TryCatch[error](func() {
+		e = NewExecAny(backend, graphFn)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
 // ExecOnce builds the graph and executes it with the given arguments, and returns the one output.
 //
 // It's short for a call to NewExec, Exec.Call and Exec.Finalize for functions that return only one output.
@@ -279,7 +294,7 @@ func ExecOnce[F ExecGraphFnOneOutput](backend backends.Backend, graphFn F, args 
 // It's short for a call to NewExec, Exec.Call and Exec.Finalize.
 //
 // See ExecOnce for a more convenient version if you have only one output.
-func ExecOnceN[F ExecGraphFnOneOutput](backend backends.Backend, graphFn F, args ...any) []*tensors.Tensor {
+func ExecOnceN[F ExecGraphFn](backend backends.Backend, graphFn F, args ...any) []*tensors.Tensor {
 	e := NewExec(backend, graphFn)
 	defer e.Finalize()
 	return e.Call(args...)
@@ -371,6 +386,23 @@ func (e *Exec) GetNodeLogger() LoggerFn {
 func (e *Exec) Call(args ...any) []*tensors.Tensor {
 	results, _ := e.CallWithGraph(args...)
 	return results
+}
+
+// CallOrError parses the arguments into tensors (if they are not yet) and executes
+// the graph corresponding to the shapes of the arguments.
+// If a graph does not yet exist, one is created, compiled and cached for the shapes.
+//
+// It returns the outputs in a slice, even if there is only one output.
+//
+// Errors (with full stack-traces) are returned.
+func (e *Exec) CallOrError(args ...any) (results []*tensors.Tensor, err error) {
+	err = TryCatch[error](func() {
+		results, _ = e.CallWithGraph(args...)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // CallWithGraph is similar to Call, but it also returns the computation graph used
@@ -473,14 +505,6 @@ func (e *Exec) compileAndExecute(execute bool, args ...any) (results []*tensors.
 		return
 	}
 	results = g.RunWithBuffers(argsAsBuffer, argsDonate)
-
-	// Free donated buffers immediately: little impact in their data, since it has been donated already,
-	// but just to clean up things.
-	for ii, donated := range argsDonate {
-		if donated {
-			e.backend.BufferFinalize(argsAsBuffer[ii])
-		}
-	}
 
 	// Call logger on logged nodes, even if no node is marked for logging (it serves as a hook).
 	numGraphFnOutputs := entry.numOutputs - len(entry.loggedMessages)
@@ -610,12 +634,20 @@ func (e *Exec) Finalize() {
 
 // DefaultNodeLogger for nodes marked to be logged. It prints the message and
 // the node value for each logged node.
+//
+// It accepts special prefixes on message name that affects the printing:
+//
+//   - #full : prints full tensor value (as opposed to abbreviated).
 func DefaultNodeLogger(g *Graph, messages []string, values []*tensors.Tensor, nodes []NodeId) {
 	if len(messages) == 0 {
 		return
 	}
 	fmt.Printf("DefaultNodeLogger(Graph %q):\n", g.Name())
 	for ii, msg := range messages {
+		if strings.HasPrefix(msg, "#full ") {
+			fmt.Printf("\t(Node #%d) %s: %s\n", nodes[ii], msg[6:], values[ii].GoStr())
+			continue
+		}
 		fmt.Printf("\t(Node #%d) %s: %s\n", nodes[ii], msg, values[ii])
 	}
 }
