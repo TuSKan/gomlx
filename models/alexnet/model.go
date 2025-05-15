@@ -40,6 +40,7 @@ func AlexNetModelGraph(ctx *context.Context, spec any, inputs []*Node) []*Node {
 
 func AlexNetEmbeddings(ctx *context.Context, image *Node) *Node {
 	batchSize := image.Shape().Dimensions[0]
+	spatialAxis := images.GetSpatialAxes(image, ChannelAxisConfig)
 	image = PreprocessImage(image, ModelImageShortSize, ChannelAxisConfig)
 
 	// Build model:
@@ -48,18 +49,20 @@ func AlexNetEmbeddings(ctx *context.Context, image *Node) *Node {
 	// Conv2D(filters=96, kernel_size=11, strides=4, activation='relu')
 	image = layers.Convolution(ctx.In("layer1"), image).Filters(96).KernelSize(11).Strides(4).Done()
 	image = activations.Relu(image)
+	image = layers.LayerNormalization(ctx, image, spatialAxis...).Done()
 	image.AssertDims(batchSize, 55, 55, 96)
 	// MaxPool2D(pool_size=3, strides=2)
-	image = MaxPool(image).Window(3).Strides(2).Done()
+	image = MaxPool(image).ChannelsAxis(ChannelAxisConfig).Window(3).Strides(2).Done()
 	image.AssertDims(batchSize, 27, 27, 96)
 
 	// Layer 2: Conv2D + MaxPool2D
 	// Conv2D(filters=256, kernel_size=5, padding='same', activation='relu')
 	image = layers.Convolution(ctx.In("layer2"), image).Filters(256).KernelSize(5).PadSame().Done()
 	image = activations.Relu(image)
+	image = layers.LayerNormalization(ctx, image, spatialAxis...).Done()
 	image.AssertDims(batchSize, 27, 27, 256)
 	// MaxPool2D(pool_size=3, strides=2)
-	image = MaxPool(image).Window(3).Strides(2).Done()
+	image = MaxPool(image).ChannelsAxis(ChannelAxisConfig).Window(3).Strides(2).Done()
 	image.AssertDims(batchSize, 13, 13, 256)
 
 	// Layer 3: Conv2D
@@ -80,7 +83,7 @@ func AlexNetEmbeddings(ctx *context.Context, image *Node) *Node {
 	image = activations.Relu(image)
 	image.AssertDims(batchSize, 13, 13, 256)
 	// MaxPool2D(pool_size=3, strides=2)
-	image = MaxPool(image).Window(3).Strides(2).Done()
+	image = MaxPool(image).ChannelsAxis(ChannelAxisConfig).Window(3).Strides(2).Done()
 	image.AssertDims(batchSize, 6, 6, 256)
 
 	// Flatten
